@@ -1,13 +1,13 @@
+import asyncio
 import os.path
-import sys
 import time
 
-from tabulate import tabulate
+import click
+import tabulate
 
 from .zipread import HTTPZipReader
-from .pages import PaginatedCollection
+from .utils import TaskQueue, PaginatedCollection
 from .repl import parse_args
-
 
 def zipinfo_time_to_iso8601(t):
     return time.strftime("%Y-%m-%dT%H:%M:%S", t + (0, 0, -1))
@@ -32,9 +32,8 @@ class UnsafePathError(Exception):
         
         super().__init__()
 
-# TODO Use click, and not this.
-if __name__ == "__main__":
-    with HTTPZipReader(sys.argv[1]) as z:
+async def amain(url):
+    async with HTTPZipReader(url) as z:
         infos = PaginatedCollection(z.entries)
 
         while True:
@@ -58,7 +57,7 @@ if __name__ == "__main__":
                             for index, info in enumerate(infos.current(),
                                                          start=infos.current_offset)]
 
-                    print(tabulate(page, headers=['#', 'entry', 'size', 'modified date']))
+                    print(tabulate.tabulate(page, headers=['#', 'entry', 'size', 'modified date']))
                 case 'prev':
                     infos.previous()
                 case 'next':
@@ -75,15 +74,19 @@ if __name__ == "__main__":
                     if 0 <= index <= len(ilist):
                         info = infos.seq[index]
 
+                        async def download_job(info):
+                            with sanitized_open(info.path, mode='wb') as output:
+                                await z.extract(info, output)
+
                         try:
                             if info.is_dir:
-                                for info1 in ilist:
-                                    if info1.path.startswith(info.path) and not info1.is_dir:
-                                        with sanitized_open(info1.path, mode='wb') as output:
-                                            z.extract(info1, output)
+                                async with TaskQueue(maxsize=10) as tg:
+                                    for info1 in ilist:
+                                        if info1.path.startswith(info.path) and not info1.is_dir:
+                                            tg.create_task(download_job(info1))
+
                             else:
-                                with sanitized_open(info.path, mode='wb') as output:
-                                    z.extract(info, output)
+                                await download_job(info)
                         except UnsafePathError as e:
                             print(f"Path {e.path} is potentially dangerous, not proceeding.")
                     else:
@@ -91,4 +94,12 @@ if __name__ == "__main__":
 
                 case wrong_cmd:
                     print(f'Not a valid command {wrong_cmd}; try again.')
+
+@click.command()
+@click.argument('url')
+def main(url):
+    asyncio.run(amain(url), debug=True)
+
+if __name__ == "__main__":
+    main()
 

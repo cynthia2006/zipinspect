@@ -31,7 +31,7 @@ class ZipEntryInfo(NamedTuple):
 
     @property
     def is_dir(self):
-        return os.path.isdir(self.path)
+        return self.path.endswith('/')
 
 class _CDFHStub(NamedTuple):
     signature: bytes
@@ -91,20 +91,10 @@ class HTTPZipReader:
 
         self.url = url
         self.entries = None
-        self.client = httpx.Client(http2=True, **httpx_args)
+        self.size = 0
+        self.client = httpx.AsyncClient(http2=True, **httpx_args)
 
-        r = self.client.head(url)
-        r.raise_for_status()
-
-        if r.headers.get('Accept-Ranges') != 'bytes':
-            raise HTTPError(f"Range requests not supported on {url}")
-
-        if size := r.headers.get('Content-Length'):
-            self.size = int(size)
-        else:
-            raise HTTPError(f"Unable to determine length of zip file for {url}")
-
-    def _do_range_request(self, start, end=None, *, stream=False, httpx_args=None):
+    async def _do_range_request(self, start, end=None, *, stream=False, httpx_args=None):
         if httpx_args is None:
             httpx_args = {}
         if start < 0:
@@ -125,13 +115,13 @@ class HTTPZipReader:
 
         request = self.client.build_request('GET', self.url, **httpx_args)
 
-        r = self.client.send(request, stream=stream)
+        r = await self.client.send(request, stream=stream)
         r.raise_for_status()
 
         return r
 
-    def _parse_eocd(self):
-        r = self._do_range_request(self.size-22)
+    async def _parse_eocd(self):
+        r = await self._do_range_request(self.size-22)
         stub = _EOCDStub._make(self.EOCD_PARSER.unpack(r.content))
 
         if (stub.disk != stub.begin_disk or
@@ -150,8 +140,8 @@ class HTTPZipReader:
         else:
             return False
 
-    def _parse_cd_ents(self, offset, size):
-        r = self._do_range_request(offset, offset+size)
+    async def _parse_cd_ents(self, offset, size):
+        r = await self._do_range_request(offset, offset+size)
         assert len(r.content) == size
 
         offset = 0
@@ -168,17 +158,12 @@ class HTTPZipReader:
             offset += stub.extra_size + stub.comment_size
             yield path, stub
 
-    def _parse_file_header(self, offset):
-        r = self._do_range_request(offset, offset + 30)
 
-        stub = _LFHStub._make(self.LFH_PARSER.unpack(r.content))
-        return stub
+    async def _calc_data_offset(self, offset: int) -> int:
+        r = await self._do_range_request(offset, offset + 30)
+        lfh = _LFHStub._make(self.LFH_PARSER.unpack(r.content))
 
-    # @staticmethod
-    def _calc_data_offset(self, offset: int) -> int:
-        lfh = self._parse_file_header(offset)
-
-        # TODO Account for encryption header.
+        # TODO Account for encryption header (GPF bit 0).
         return (offset
                     + 30             # LFH Header
                     + lfh.path_size  # ... Variable Field
@@ -188,7 +173,7 @@ class HTTPZipReader:
     def _parse_msdos_date(date, time):
         # See: https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-dosdatetimetofiletime
         # Microsoft was retarded from its early days.
-        year   = date >> 9 + 1980
+        year   = date >> 8 + 1980
         month  = date >> 5 & 0xF
         day    = date      & 0x1F
         hour   = time >> 11
@@ -197,12 +182,23 @@ class HTTPZipReader:
 
         return year, month, day, hour, minute, second*2
 
-    def load_entries(self):
+    async def load_entries(self):
         if self.entries is not None:
             return
 
+        r = await self.client.head(self.url)
+        r.raise_for_status()
+
+        if r.headers.get('Accept-Ranges') != 'bytes':
+            raise HTTPError(f"Range requests not supported on {self.url}")
+
+        if size := r.headers.get('Content-Length'):
+            self.size = int(size)
+        else:
+            raise HTTPError(f"Unable to determine length of zip file for {self.url}")
+
         # TODO Implement Zip64 for better compatibility.
-        eocd = self._parse_eocd()
+        eocd = await self._parse_eocd()
         if self._detect_zip64_from_eocd(eocd):
             raise NotImplementedError("Zip64 is not implemented, sorry")
 
@@ -215,13 +211,17 @@ class HTTPZipReader:
                                      modified_date=self._parse_msdos_date(info.file_mdate, info.file_mtime),
                                      internal_attrs=info.internal_attrs,
                                      external_attrs=info.external_attrs)
-                        for path, info in self._parse_cd_ents(eocd.cd_offset, eocd.cd_size)]
+                        async for path, info in self._parse_cd_ents(eocd.cd_offset, eocd.cd_size)]
 
+    async def extract(self, info, output):
+        offset = await self._calc_data_offset(info.raw_offset)
 
-    def extract(self, info, output, *, progress=None):
-        offset = self._calc_data_offset(info.raw_offset)
+        # TODO Preferably raise an exception here for empty files.
+        if info.compressed_size == 0:
+            return
 
-        r = self._do_range_request(offset, offset + info.compressed_size, stream=True)
+        r = await self._do_range_request(offset,
+                                         offset + info.compressed_size, stream=True)
 
         match info.compression:
             case ZipCompression.NONE:
@@ -236,39 +236,22 @@ class HTTPZipReader:
                 decompressor = compression.zstd.ZstdDecompressor()
             case _:
                 raise NotImplementedError
-
-        processed = 0
-        remaining = info.file_size
-
-        if progress:
-            def report_progress(chunk):
-                processed += len(length)
-                progress(processed, remaining, chunk)
-        else:
-            def report_progress(chunk):
-                pass
         
         if decompressor:
-            for chunk in r.iter_bytes():
+            async for chunk in r.aiter_bytes():
                 decompressed = decompressor.decompress(chunk)
                 output.write(decompressed)
 
-                report_progress(decompressed)
-
             decompressed = decompressor.flush()
             output.write(decompressed)
-
-            report_progress(decompressed)
         else:
-            for chunk in r.iter_bytes():
+            async for chunk in r.aiter_bytes():
                 output.write(chunk)
 
-                report_progress(decompressed)
-
-    def __enter__(self):
-        self.load_entries()
+    async def __aenter__(self):
+        await self.load_entries()
 
         return self
 
-    def __exit__(self, ex, ex_val, tb):
-        self.client.close()
+    async def __aexit__(self, ex, ex_val, tb):
+        pass
