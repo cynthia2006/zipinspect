@@ -115,7 +115,7 @@ wheels = [
 ]
 
 [[package]]
-name = "zipstream"
+name = "zipinspect"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
