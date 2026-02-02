@@ -4,7 +4,7 @@ import time
 
 from tabulate import tabulate
 
-from .zipread import HTTPZipReader, ZipEntryInfo
+from .zipread import HTTPZipReader
 from .pages import PaginatedCollection
 from .repl import parse_args
 
@@ -18,19 +18,19 @@ def numfmt_iec(n):
             return f'{n:3.1f}{u}'
         n /= 1024.0
 
-class UnsafePathError(Exception):
-    def __init__(self, path):
-        self.path = path
-        super().__init__()
-
 def sanitized_open(path, **kwargs):
     path = os.path.abspath(path)
-
-    if os.path.commonpath((os.getcwd(), os.getcwd())) != os.getcwd():
-        raise UnsafePathError("Path is outside the scope of working directory")
+    if os.path.commonpath((path, os.getcwd())) != os.getcwd():
+        raise UnsafePathError(path)
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
     return open(path, **kwargs)
+
+class UnsafePathError(Exception):
+    def __init__(self, path):
+        self.path = path
+        
+        super().__init__()
 
 # TODO Use click, and not this.
 if __name__ == "__main__":
@@ -48,7 +48,7 @@ if __name__ == "__main__":
 
             match args[0]:
                 case 'list':
-                    def zipinfo_to_row(info: ZipEntryInfo):
+                    def zipinfo_to_row(info):
                         size = numfmt_iec(info.file_size) if not info.is_dir else 'N/A'
                         timestamp = zipinfo_time_to_iso8601(info.modified_date)
 
