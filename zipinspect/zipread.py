@@ -240,28 +240,30 @@ class HTTPZipReader:
         processed = 0
         remaining = info.file_size
 
+        if progress:
+            def report_progress(chunk):
+                processed += len(length)
+                progress(processed, remaining, chunk)
+        else:
+            def report_progress(chunk):
+                pass
+        
         if decompressor:
             for chunk in r.iter_bytes():
                 decompressed = decompressor.decompress(chunk)
                 output.write(decompressed)
 
-                processed += len(decompressed)
-                if progress:
-                    progress(processed, remaining)
+                report_progress(decompressed)
 
             decompressed = decompressor.flush()
             output.write(decompressed)
 
-            processed += len(decompressed)
-            if progress:
-                progress(processed, remaining)
+            report_progress(decompressed)
         else:
             for chunk in r.iter_bytes():
                 output.write(chunk)
 
-                processed += len(chunk)
-                if progress:
-                    progress(processed, remaining)
+                report_progress(decompressed)
 
     def __enter__(self):
         self.load_entries()
