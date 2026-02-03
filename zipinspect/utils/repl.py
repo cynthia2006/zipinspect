@@ -1,10 +1,7 @@
-from typing import List
-
-
 class ReplSyntaxError(Exception):
     pass
 
-def parse_args(line: str) -> List[str]:
+def parse_args(line):
     """Space delimited argument parser like the shell, but minimal."""
     parsed = []
     accum = ''
