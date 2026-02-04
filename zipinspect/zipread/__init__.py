@@ -60,7 +60,7 @@ class HTTPZipReader:
         self.url = url
         self.entries = None
         self.size = 0
-        self.client = httpx.AsyncClient(http2=True, **httpx_args)
+        self.client = httpx.AsyncClient(follow_redirects=True, http2=True, **httpx_args)
 
     async def _request(self, start, end=None, *, stream=False, httpx_args=None):
         if httpx_args is None:
