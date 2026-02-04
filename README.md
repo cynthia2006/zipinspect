@@ -3,9 +3,9 @@
 ![PyPI - Version](https://img.shields.io/pypi/v/zipinspect?style=for-the-badge)
 
 
-PKWare's [Zip](https://en.wikipedia.org/wiki/ZIP_(file_format)) is the ubiquitous format for file archival; so much so that it's considered both a noun and verb. Invented in 1989, it has been extensively used to compress or seamlessly transfer multiple files. Zip has one major advantage over [Tarballs](https://en.wikipedia.org/wiki/Tar_(computing)) — random access. Some (especially UNIX purists) may criticise Zip for worse compression ratios if there's data redundancy present amongst files in the archive, because it compresses file individually. However, that its strongest points too; it enables us to extract a single file without decompressing the whole archive, unlike compressed tarballs. And, not only that, it enables fast append/update/deletes, which is not possible Tarballs, without decompressing and creating one anew.
+PKWare's [Zip](https://en.wikipedia.org/wiki/ZIP_(file_format)) is the ubiquitous format for file archival; so much so that it's considered both a noun and verb. Invented in 1989, it has been extensively used to compress or seamlessly transfer multiple files. Zip has one major advantage over [tarballs](https://en.wikipedia.org/wiki/Tar_(computing)) — random access. Some (especially UNIX purists) may criticise Zip for worse compression ratios if there's data redundancy present amongst files in the archive, because it compresses files individually. However, that is its strongest point too; it enables us to extract a single file without decompressing the whole archive, unlike compressed tarballs. Not only that, it enables fast append/update/delete, which is not possible with tarballs without decompressing and creating anew.
 
-This tool covers a rather niche usecase — Zip files on the network, accessed using HTTP. HTTP has a neat feature called [range requests](https://http.dev/range-request), which is extensively used here; in your browser it's typically used for resumable downloads. In a nutshell, it's a variant of the normal GET request wherein the client signals the range of data it's interested in, and server responds accordingly with 206 status code. Here, this is what allows for random access of files.
+This tool covers a rather niche usecase — Zip files on the network, accessed using HTTP. HTTP has a neat feature called [range requests](https://http.dev/range-request), which is extensively used here; in your browser it's typically used for resumable downloads. In a nutshell, it's a variant of the normal GET request wherein the client signals the range of data it's interested in, and the server responds accordingly with a 206 status code. Here, this is what allows for random access of files.
 
 ## Demo
 
@@ -55,7 +55,7 @@ $ zipinspect 'https://example.com/ArthurRimbaud-OnlyFans.zip'
 > 
 ```
 
-First the entries in the archive — files and directories — are loaded, and the user is presented with a REPL (command prompt), where the files could be easily browsed and extracted. Multiple entries could be downloaded concurrently thanks to its underlying asynchronous implementation.
+First, the entries in the archive — files and directories — are loaded, and the user is presented with a REPL (command prompt), where the files can be easily browsed and extracted. Multiple entries can be downloaded concurrently thanks to the underlying asynchronous implementation.
 
 ## Installation
 
@@ -93,18 +93,18 @@ extract <start>,...,<end> [dir] Extract entries from <start> to <end>
 extract <i0>,<i1>,...<in> [dir] Extract entries with specified indices
 
 NOTE: The extract command accepts an optional path to the directory to extract into.
-If not provided, it extracts into the current working directory
+If not provided, it extracts into the current working directory.
 ```
 
-If any of the arguments contains a space wrap it in a double-quote; or if it contains a double quote, wrap in a double quote and backslash-escape it.
+If any of the arguments contains a space, wrap it in a double-quote; or if it contains a double quote, wrap it in a double quote and backslash-escape it.
 
 ## Remarks
 
-Initially, [zipfile](https://docs.python.org/3/library/zipfile.html#zipfile-objects) was considered along with a seekable file-like interface into the remote file using HTTP transport. Although the prototype worked, but it was nowhere near as performant as it is now. The major issue was that, through the abstract interface sequential accesses couldn't be differentiated with random accesses. 
+Initially, [zipfile](https://docs.python.org/3/library/zipfile.html#zipfile-objects) was considered along with a seekable file-like interface into the remote file using HTTP transport. Although the prototype worked, it was nowhere near as performant as it is now. The major issue was that, through the abstract interface, sequential accesses couldn't be differentiated from random accesses. 
 
-Technically only sequential access is possible with HTTP, because HTTP is a stateless protocol; but to support our needs, random accesses are implemented using HTTP range requests. This isn't without performance penalty, as for each request the server has to setup a handler to serve that request; so we have to minimise these if the amount of data to be read is known in advance. We do [know the compressed size], but unfortunately the `zipfile` API isn't aware all these complexities, so it does a lot of unnecessary seeks that prevents any possible optimisations. 
+Technically, only sequential access is possible with HTTP, because HTTP is a stateless protocol; but to support our needs, random accesses are implemented using HTTP range requests. This isn't without a performance penalty, as for each request the server has to setup a handler to serve that request; we have to minimise these if the amount of data to be read is known in advance. We do know the compressed size, but unfortunately the `zipfile` API isn't aware of all these complexities, so it does a lot of unnecessary seeks that prevent any possible optimisations. 
 
 ### The solution? 
 
-Implement the Zip specification from scratch, preferably with asynchronous API to allow concurrent extractions. That's what was done. Much the information on implementation was derived from the Wikipedia page and PKWare [APPNOTE.txt](https://pkwaredownloads.blob.core.windows.net/pkware-general/Documentation/APPNOTE-6.3.9.TXT). It's not entirely specification-compliant, but hopes to function in majority of the cases.
+Implement the Zip specification from scratch, preferably with an asynchronous API to allow concurrent extractions. That's what was done. Much of the information on implementation was derived from the Wikipedia page and PKWare [APPNOTE.txt](https://pkwaredownloads.blob.core.windows.net/pkware-general/Documentation/APPNOTE-6.3.9.TXT). It's not entirely specification-compliant, but hopes to function in the majority of cases.
 
