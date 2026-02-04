@@ -6,14 +6,12 @@ class PaginatedCollection:
         self.page_size = page_size
 
     def previous(self):
-        """Seek to previous page; wrap around if at first page."""
         if self.current_page == 0:
             self.current_page = self.n_pages-1
         else:
             self.current_page -= 1
 
     def next(self):
-        """Seek to next page; wrap around if at last page."""
         if self.current_page == self.n_pages-1:
             self.current_page = 0
         else:

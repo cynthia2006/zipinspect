@@ -16,6 +16,12 @@ from .stubs import (
     _EOCD64Stub
 )
 
+_LFHStruct = Struct('<4sHHHHHIIIHH')
+_CDFHStruct = Struct('<4sHHHHHHIIIHHHHHII')
+_EOCDStruct = Struct('<4sHHHHII')
+_EOCD64Struct = Struct('<4sQHHIIQQQQ')
+_EOCD64LocatorStruct = Struct('<4sIQI')
+
 class ZipCompression(Enum):
     NONE = 0
     DEFLATE = 8
@@ -40,21 +46,11 @@ class ZipEntryInfo:
     def is_dir(self):
         return self.path.endswith('/')
 
-
 class ZipError(Exception):
     pass
 
-
 class HTTPError(Exception):
     pass
-
-
-_LFHStruct = Struct('<4sHHHHHIIIHH')
-_CDFHStruct = Struct('<4sHHHHHHIIIHHHHHII')
-_EOCDStruct = Struct('<4sHHHHII')
-_ExtraStruct = Struct('<2sH')
-_EOCD64Struct = Struct('<4sQHHIIQQQQ')
-_EOCD64LocatorStruct = Struct('<4sIQI')
 
 
 class HTTPZipReader:
@@ -116,20 +112,17 @@ class HTTPZipReader:
         r = await self._request(eocd_start - 20, eocd_start)
 
         signature, disk, offset, n_disks = _EOCD64LocatorStruct.unpack(r.content)
-
         if signature != b'\x50\x4B\x06\x07':
             raise ZipError(f"Invalid EOCD64 signature: {signature.hex()}")
         if disk != 0 or n_disks == 1:
-            raise ZipError("Multipart Zip files aren't supported.")
+            raise ZipError("Multipart Zip files aren't supported")
 
         return offset
 
     @staticmethod
     def _detect_zip64_from_eocd(stub: _EOCDStub):
-        if (stub.disk == 0xFFFF and
-                stub.ents_total == 0xFFF and
-                stub.cd_size == 0xFFFFFFF and
-                stub.cd_offset == 0xFFFFFFFF):
+        if (stub.disk == 0xFFFF and stub.ents_total == 0xFFF and
+            stub.cd_size == 0xFFFFFFF and stub.cd_offset == 0xFFFFFFFF):
             return True
         else:
             return False
@@ -260,8 +253,7 @@ class HTTPZipReader:
         if info.encrypted:
             raise ZipError("Encrypted files are not supported")
 
-        r = await self._request(offset,
-                                offset + info.compressed_size, stream=True)
+        r = await self._request(offset, offset + info.compressed_size, stream=True)
 
         match info.compression:
             case ZipCompression.NONE:

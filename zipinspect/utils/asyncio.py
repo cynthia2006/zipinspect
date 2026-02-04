@@ -1,6 +1,6 @@
 from asyncio import TaskGroup, Semaphore
 
-class TaskQueue(TaskGroup):
+class TaskPool(TaskGroup):
     def __init__(self, *, maxsize):
         self._semaphore = Semaphore(maxsize)
         super().__init__()

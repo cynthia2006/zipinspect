@@ -1,17 +1,20 @@
 import asyncio
 import os.path
+import sys
+import textwrap
 import time
 
-import click
-import tabulate
-from tqdm import tqdm
+from tabulate import tabulate
+from progress.bar import Bar
+from aioconsole import ainput
 
 from .zipread import HTTPZipReader
-from .utils.asyncio import TaskQueue
-from .utils.misc import PaginatedCollection
-from .utils.repl import parse_args
 
-def zipinfo_time_to_iso8601(t):
+from .utils.asyncio import TaskPool
+from .utils.misc import PaginatedCollection
+
+
+def dostime_to_rfc3339(t):
     return time.strftime("%Y-%m-%dT%H:%M:%S", t + (0, 0, -1))
 
 def numfmt_iec(n):
@@ -20,110 +23,212 @@ def numfmt_iec(n):
             return f'{n:3.1f}{u}'
         n /= 1024.0
 
-def sanitized_open(path, **kwargs):
+def sanitized_open(path, *args, **kwargs):
     path = os.path.abspath(path)
     if os.path.commonpath((path, os.getcwd())) != os.getcwd():
-        raise UnsafePathError(path)
+        print(f"WARNING: Path {path} is dangerous; ignoring")
+        return None
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    return open(path, **kwargs)
+    return open(path, *args, **kwargs)
 
-class UnsafePathError(Exception):
-    def __init__(self, path):
-        self.path = path
-        
-        super().__init__()
+def parse_repl_args(line):
+    """Space delimited argument parser like the shell, but minimal."""
+    parsed = []
+    accum = ''
+    escape = False
+    quote = False
 
-async def amain(url):
+    for i, token in enumerate(line):
+        if quote:
+            if escape:
+                if token in '\\"':
+                    accum += token
+                    escape = False
+                else:
+                    print(f"ERROR: Cannot escape {token} at column {i}")
+            else:
+                if token == '\\':
+                    escape = True
+                elif token == '"':
+                    quote = False # Quote end
+                else:
+                    accum += token
+        else:
+            # Only append if accum is not empty
+            if token == ' ' and accum != '':
+                parsed.append(accum)
+                accum = '' # Reset
+            elif token == '"':
+                quote = True # Quote start
+            else:
+                accum += token
+
+    # Push the last argument
+    if accum:
+        parsed.append(accum)
+
+    return parsed
+
+async def extract_entries(z, entries, *, out_dir=None, concurrency=10):
+    async def extract_entry(entry, *, progress_cb):
+        final_path = f'{out_dir}/{entry.path}' if out_dir else entry.path
+
+        if not (output := sanitized_open(final_path, 'wb')):
+            return
+
+        # NOTE Multiple running async-for loops (i.e. async generators) are cumbersome,
+        # and thus to make matters manageable we use the good 'ol callbacks instead.
+        with output:
+            async for processed in z.extract(entry, output):
+                progress_cb(processed)
+
+
+    async with TaskPool(maxsize=concurrency) as pool:
+        visited_dirs = set()
+        total_tx = 0
+        coros = set()
+        bar = None
+
+        # Non-obvious control flow: by the time this function is called, `bar' would've been defined.
+        # This style of programming -- relying on global state -- is considered bad practice, but here
+        # this saves us the burden of not introducing one more asyncio.Task in the task pool.
+        def increment_done(n):
+            bar.next(n)
+
+        for info in entries:
+            if info.is_dir:
+                # Recursing into directories
+                if info.path not in visited_dirs:
+                    visited_dirs.add(info.path)
+
+                    for nested_info in z.entries:
+                        if (not nested_info.is_dir and
+                                nested_info.path.startswith(info.path)):
+                            coros.add(extract_entry(nested_info, progress_cb=increment_done))
+                            total_tx += nested_info.file_size
+
+            else: # Single files
+                if os.path.dirname(info.path) not in visited_dirs:
+                    coros.add(extract_entry(info, progress_cb=increment_done))
+                    total_tx += info.file_size
+
+        bar = Bar(max=total_tx, width=80, suffix='%(percent)d%%')
+        for coro in coros:
+            pool.create_task(coro)
+        bar.finish()
+
+
+def print_entries(pages):
+    def zipinfo_to_row(info):
+        size = numfmt_iec(info.file_size) \
+            if not info.is_dir else 'N/A'
+        timestamp = dostime_to_rfc3339(info.modified_date)
+
+        return info.path, size, timestamp
+
+    page = [(i, *zipinfo_to_row(info))
+            for i, info in enumerate(pages.current(),
+                                     start=pages.current_offset)]
+
+    print(tabulate(page, headers=['#', 'entry', 'size', 'modified date']))
+    print(f"(Page {pages.current_page + 1}/{pages.n_pages})")
+
+def int_safe(v, *args, **kwargs):
+    try:
+        iv = int(v, *args, **kwargs)
+    except ValueError:
+        iv = None
+
+        if v == '...':
+            print("ERROR: Ellipsis (...) is used in a wrong way", file=sys.stderr)
+        else:
+            print(f"ERROR: {v!r} is not an integer value", file=sys.stderr)
+
+    return iv
+
+async def main(url):
     async with HTTPZipReader(url) as z:
-        infopages = PaginatedCollection(z.entries)
+        pages = PaginatedCollection(z.entries)
 
         while True:
             try:
-                args = parse_args(input('> '))
+                args = parse_repl_args(await ainput("> "))
             except EOFError:
                 break
 
+            # Skip empty prompts.
             if len(args) < 1:
                 continue
 
-            def print_entries():
-                def zipinfo_to_row(info):
-                    size = numfmt_iec(info.file_size) if not info.is_dir else 'N/A'
-                    timestamp = zipinfo_time_to_iso8601(info.modified_date)
-
-                    return info.path, size, timestamp
-
-                page = [(i, *zipinfo_to_row(info))
-                        for i, info in enumerate(infopages.current(),
-                                                     start=infopages.current_offset)]
-
-                print(tabulate.tabulate(page, headers=['#', 'entry', 'size', 'modified date']))
-                print(f"(Page {infopages.current_page + 1}/{infopages.n_pages})")
-
-            async def download_job(info):
-                with (sanitized_open(info.path, mode='wb') as output,
-                      tqdm(desc=os.path.basename(info.path),
-                           total=info.file_size, unit='B', unit_scale=True) as pbar):
-                    async for processed in z.extract(info, output):
-                        pbar.update(processed)
-
             match args[0]:
                 case 'help':
-                    print("This is the REPL, and the following commands are available.\n"
-                          "\n"
-                          "list                     List entries in the current page\n"
-                          "prev                     Go backward one page, and list\n"
-                          "next                     Go forward one page, and list\n"  
-                          "extract <index>          Extract entry with index <index>\n"   
-                          "extract <start>[-<end>]  Extract entires from <start> upto end")
+                    print(textwrap.dedent("""\
+                          This is the REPL, and the following commands are available.
+                          
+                          list                            List entries in the current page
+                          prev                            Go backward one page and show entries
+                          next                            Go forward one page and show entries
+                          extract <index> [dir]           Extract entry with index <index>
+                          extract <start>,...,<end> [dir] Extract entries from <start> to <end>
+                          extract <i0>,<i1>,...<in> [dir] Extract entries with specified indices
+                          
+                          NOTE: The extract command accepts an optinal path to the directory to extract into.
+                          If not provided, it extracts into the current working directory"""))
                 case 'list':
-                    print_entries()
+                    print_entries(pages)
                 case 'prev':
-                    infopages.previous()
-                    print_entries()
+                    pages.previous()
+                    print_entries(pages)
                 case 'next':
-                    infopages.next()
-                    print_entries()
+                    pages.next()
+                    print_entries(pages)
                 case 'extract':
-                    # TODO Implement a method of specifying path.
                     if len(args) < 2:
-                        print("ERROR: No index provided; retry.")
+                        print("ERROR: Nothing to extract, forgot an argument?", file=sys.stderr)
                         continue
 
-                    ilist = z.entries
-                    index = args[1].split('-')
+                    indices = args[1].split(',')
+                    out_dir = None
 
-                    start = int(index[0])
-                    if len(index) > 1:
-                        end = int(index[1] or len(ilist))
+                    if len(args) > 3:
+                        out_dir = args[2]
+
+                    if len(indices) == 1:
+                        start = int_safe(indices[0])
+                        if start is None:
+                            continue
+
+                        if not 0 <= start < len(z.entries):
+                            print(f"ERROR: Index {start} is out of bounds", file=sys.stderr)
+                            continue
+
+                        await extract_entries(z, (z.entries[start],), out_dir=out_dir)
                     else:
-                        end = start + 1
+                        if len(indices) == 3 and indices[1] == '...':
+                            start, end = int_safe(indices[0]), int_safe(indices[2])
 
-                    if 0 <= start < len(ilist) and start < end <= len(ilist):
-                        async with TaskQueue(maxsize=10) as tg:
-                            for info in ilist[start:end]:
-                                try:
-                                    if info.is_dir:
-                                        for info1 in ilist:
-                                            if info1.path.startswith(info.path) and not info1.is_dir:
-                                                tg.create_task(download_job(info1))
+                            if start is None or end is None:
+                                continue
+                            if not(0 <= start < end < len(z.entries)):
+                                print(f"ERROR: Range {start},...,{end} is out of bounds", file=sys.stderr)
+                                continue
 
-                                    else:
-                                        tg.create_task(download_job(info))
-                                except UnsafePathError as e:
-                                    print(f"Path {e.path} is potentially dangerous, not proceeding.")
-                    else:
-                        print(f"ERROR: Index out of bounds, max {len(ilist)}")
+                            await extract_entries(z, z.entries[start:end], out_dir=out_dir)
+                        else:
+                            # Filter out invalid and out-of-bounds indices
+                            entries = [z.entries[iv] for s in indices
+                                                     if (iv := int_safe(s)) is not None and 0 <= iv < len(z.entries)]
+                            await extract_entries(z, entries, out_dir=out_dir)
 
+                    # FIXME For some reason, Bar.finish() doesn't end with a newline.
+                    sys.stdout.write('\n\n')
                 case wrong_cmd:
-                    print(f'Not a valid command {wrong_cmd}; try again.')
-
-@click.command()
-@click.argument('url')
-def main(url):
-    asyncio.run(amain(url), debug=True)
+                    print(f"ERROR: Not a valid command {wrong_cmd}; try again.", file=sys.stderr)
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) < 2:
+        print("Forgot thy URL?", file=sys.stderr)
+
+    asyncio.run(main(sys.argv[1]), debug=True)
 
