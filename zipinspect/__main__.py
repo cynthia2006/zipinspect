@@ -191,7 +191,7 @@ async def main(url):
                     indices = args[1].split(',')
                     out_dir = None
 
-                    if len(args) > 3:
+                    if len(args) > 2:
                         out_dir = args[2]
 
                     if len(indices) == 1:
