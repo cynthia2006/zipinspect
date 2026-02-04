@@ -1,6 +1,8 @@
 [project]
 name = "zipinspect"
-author = "Cynthia"
+authors = [
+    {name = "Cynthia", email = "cynthia2048@proton.me" }
+]
 readme = "README.md"
 description = "Small utility to inspect/extract Zip files over HTTP"
 version = "0.1.0"
@@ -11,3 +13,10 @@ dependencies = [
     "progress>=1.6.1",
     "httpx[http2]>=0.28.1",
 ]
+
+[project.scripts]
+zipinspect = "zipinspect:main"
+
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"

@@ -1,5 +1,8 @@
 # zipinspect
 
+![PyPI - Version](https://img.shields.io/pypi/v/zipinspect?style=for-the-badge)
+
+
 PKWare's [Zip](https://en.wikipedia.org/wiki/ZIP_(file_format)) is the ubiquitous format for file archival; so much so that it's considered both a noun and verb. Invented in 1989, it has been extensively used to compress or seamlessly transfer multiple files. Zip has one major advantage over [Tarballs](https://en.wikipedia.org/wiki/Tar_(computing)) — random access. Some (especially UNIX purists) may criticise Zip for worse compression ratios if there's data redundancy present amongst files in the archive, because it compresses file individually. However, that its strongest points too; it enables us to extract a single file without decompressing the whole archive, unlike compressed tarballs. And, not only that, it enables fast append/update/deletes, which is not possible Tarballs, without decompressing and creating one anew.
 
 This tool covers a rather niche usecase — Zip files on the network, accessed using HTTP. HTTP has a neat feature called [range requests](https://http.dev/range-request), which is extensively used here; in your browser it's typically used for resumable downloads. In a nutshell, it's a variant of the normal GET request wherein the client signals the range of data it's interested in, and server responds accordingly with 206 status code. Here, this is what allows for random access of files.
@@ -53,6 +56,18 @@ $ zipinspect 'https://example.com/ArthurRimbaud-OnlyFans.zip'
 ```
 
 First the entries in the archive — files and directories — are loaded, and the user is presented with a REPL (command prompt), where the files could be easily browsed and extracted. Multiple entries could be downloaded concurrently thanks to its underlying asynchronous implementation.
+
+## Installation
+
+```
+$ pip install zipinspect
+```
+
+### uv
+
+```
+$ uv tool install zipinspect
+```
 
 ## Features & Limitations
 
