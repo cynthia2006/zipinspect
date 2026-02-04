@@ -81,18 +81,20 @@ $ uv tool install zipinspect
 ## Help
 
 In the REPL, `help` command lists all the available commands and their corresponding arguments.                   
-    > help
-    This is the REPL, and the following commands are available.
-    
-    list                            List entries in the current page
-    prev                            Go backward one page and show entries
-    next                            Go forward one page and show entries
-    extract <index> [dir]           Extract entry with index <index>
-    extract <start>,...,<end> [dir] Extract entries from <start> to <end>
-    extract <i0>,<i1>,...<in> [dir] Extract entries with specified indices
-    
-    NOTE: The extract command accepts an optional path to the directory to extract into.
-    If not provided, it extracts into the current working directory
+```
+> help
+This is the REPL, and the following commands are available.
+
+list                            List entries in the current page
+prev                            Go backward one page and show entries
+next                            Go forward one page and show entries
+extract <index> [dir]           Extract entry with index <index>
+extract <start>,...,<end> [dir] Extract entries from <start> to <end>
+extract <i0>,<i1>,...<in> [dir] Extract entries with specified indices
+
+NOTE: The extract command accepts an optional path to the directory to extract into.
+If not provided, it extracts into the current working directory
+```
 
 If any of the arguments contains a space wrap it in a double-quote; or if it contains a double quote, wrap in a double quote and backslash-escape it.
 
