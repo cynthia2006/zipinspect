@@ -2,14 +2,26 @@
 
 ![PyPI - Version](https://img.shields.io/pypi/v/zipinspect?style=for-the-badge)
 
+Zip files on the network — a niche use case, but still an interesting one to cover. This tool aims to extract individual files from Zip files over HTTP without downloading the whole file. It depends on the fact that HTTP [range requests](https://en.wikipedia.org/wiki/Byte_serving) are available (i.e. downloading the file can be resumed), otherwise it refuses to operate as it would defeat the purpose of this tool.
 
-PKWare's [Zip](https://en.wikipedia.org/wiki/ZIP_(file_format)) is the ubiquitous format for file archival; so much so that it's considered both a noun and verb. Invented in 1989, it has been extensively used to compress or seamlessly transfer multiple files. Zip has one major advantage over [Tarballs](https://en.wikipedia.org/wiki/Tar_(computing)) — random access. Some (especially UNIX purists) may criticise Zip for worse compression ratios if there's data redundancy present amongst files in the archive, because it compresses file individually. However, that its strongest points too; it enables us to extract a single file without decompressing the whole archive, unlike compressed tarballs. And, not only that, it enables fast append/update/deletes, which is not possible Tarballs, without decompressing and creating one anew.
+## Installation
 
-This tool covers a rather niche usecase — Zip files on the network, accessed using HTTP. HTTP has a neat feature called [range requests](https://http.dev/range-request), which is extensively used here; in your browser it's typically used for resumable downloads. In a nutshell, it's a variant of the normal GET request wherein the client signals the range of data it's interested in, and server responds accordingly with 206 status code. Here, this is what allows for random access of files.
+```
+$ pip install zipinspect
+```
+
+### uv
+
+```
+$ uv tool install zipinspect
+```
 
 ## Demo
 
 ```sh
+# If uvx (astral.sh/uv) is avaiable, an installation is not required; just use
+#
+# 	uvx zipinspect 'https://example.com/ArthurRimbaud-OnlyFans.zip'
 $ zipinspect 'https://example.com/ArthurRimbaud-OnlyFans.zip'
 > list
   #  entry                    size    modified date
@@ -52,22 +64,10 @@ $ zipinspect 'https://example.com/ArthurRimbaud-OnlyFans.zip'
  
  |#######################################################################| 100%
 
-> 
+>
 ```
 
-First the entries in the archive — files and directories — are loaded, and the user is presented with a REPL (command prompt), where the files could be easily browsed and extracted. Multiple entries could be downloaded concurrently thanks to its underlying asynchronous implementation.
-
-## Installation
-
-```
-$ pip install zipinspect
-```
-
-### uv
-
-```
-$ uv tool install zipinspect
-```
+First the entries in the archive are loaded, then the user is presented with a REPL, where the files could be browsed and extracted. Multiple entries could be downloaded currently using the range syntax, and the downloads are fast because of its asynchronous design.
 
 ## Features & Limitations
 
@@ -96,15 +96,35 @@ NOTE: The extract command accepts an optional path to the directory to extract i
 If not provided, it extracts into the current working directory
 ```
 
-If any of the arguments contains a space wrap it in a double-quote; or if it contains a double quote, wrap in a double quote and backslash-escape it.
+1. If any of the arguments contain a space wrap it in a double-quote; if it contains a double quote, wrap in a double quote and backslash-escape it.
+2. If an index to a directory is provided to extract, it downloads the files and folders within it recursively.
+3. If a file or folder already exists in the filesystem, it **doesn't ask for permission to overwrite it.**
+
+## How it works
+
+The Zip format compresses each files individually, unlike some other formats (e.g. [Tarballs](https://en.wikipedia.org/wiki/Tar_(computing))), and stores offsets to file entries along with all necessary metadata in its **central directory**, which is located at the end of the file. The existence of a central directory allows us to extract, not the whole archive, but just the file we're interested in. Though this might not translate to much for Zip files available locally, it however provides a great advantage when Zip files exist remotely (see [this](https://www.djmannion.net/partial_zip/)). 
+
+### An Example
+
+For instance, assume you have a large Zip archive full of pictures — weighing 42 GiB — stored on a remote server far away, and you require to fetch a few images worth 21 MiB. Now, would you rather download the entire archive and then extract the files you need, or would you rather download just the files you need? It depends on the speed of your connection, storage capacity, and patience. Not everyone has the luxury to afford these.
+
+### The procedure
+
+Since, most people are unable to afford such lavish lifestyles, this tool comes in handy. When you run it with a URL,
+
+1. The list of entries in the Zip archive are loaded in first, reading the central directory record.
+2. The user can interactively browse the list of present entries using `prev`, `next` and `list` commands.
+3. File(s) could be extracted using the `extract` command with [fearless concurrency](https://gist.github.com/cynthia2006/584f518161cfcba9a745afd94c903304) and [![blazingly fast](https://www.blazingly.fast/api/badge.svg?repo=cynthia2006%2Fzipinspect)](https://www.blazingly.fast)speeds.
+
+The result? You don't waste bandwidth more than the size of the files you asked for.
 
 ## Remarks
 
-Initially, [zipfile](https://docs.python.org/3/library/zipfile.html#zipfile-objects) was considered along with a seekable file-like interface into the remote file using HTTP transport. Although the prototype worked, but it was nowhere near as performant as it is now. The major issue was that, through the abstract interface sequential accesses couldn't be differentiated with random accesses. 
+The initial implementation consisted of [zipfile](https://docs.python.org/3/library/zipfile.html#zipfile-objects), along with a seekable file object wrapper for the remote file. Though the prototype worked, its performance was abysmal. The major bottleneck of this naive approach was that, through the abstract interface sequential accesses couldn't be differentiated with random accesses. 
 
-Technically only sequential access is possible with HTTP, because HTTP is a stateless protocol; but to support our needs, random accesses are implemented using HTTP range requests. This isn't without performance penalty, as for each request the server has to setup a handler to serve that request; so we have to minimise these if the amount of data to be read is known in advance. We do [know the compressed size], but unfortunately the `zipfile` API isn't aware all these complexities, so it does a lot of unnecessary seeks that prevents any possible optimisations. 
+Technically speaking, only sequential access is possible via HTTP, because it's a stateless protocol, but to support our needs, random accesses in the file are implemented using HTTP range requests. This incurs a performance penalty, and quite noticeable too even with a single transfer; for each GET request the server has to setup a handler (CGI, FastCGI, et al.), open the file, seek to a position, and various other tasks to be able to respond. Thus considering this overhead, we have to minimise the number of requests if the amount of data to be read is known in advance. Fortunately, we do, but `zipfile` API is oblivious to all these complexities about its interface, so it performs lots of unnecessary seeks that prevents optimisations to be made.
 
 ### The solution? 
 
-Implement the Zip specification from scratch, preferably with asynchronous API to allow concurrent extractions. That's what was done. Much the information on implementation was derived from the Wikipedia page and PKWare [APPNOTE.txt](https://pkwaredownloads.blob.core.windows.net/pkware-general/Documentation/APPNOTE-6.3.9.TXT). It's not entirely specification-compliant, but hopes to function in majority of the cases.
+Implement the Zip specification from scratch, preferably with an asynchronous API to allow concurrent extractions. That's what was done in this case — an HTTP-aware Zip extractor implementation. Much of the information concerning the format was derived from the Wikipedia page and PKWare's original [APPNOTE.txt](https://pkwaredownloads.blob.core.windows.net/pkware-general/Documentation/APPNOTE-6.3.9.TXT) (Zip specification). Though it's not entirely on par the specification or more mature implementations, but it hopes to work in the majority of the cases. If you need a feature, open a Github Issue.
 
